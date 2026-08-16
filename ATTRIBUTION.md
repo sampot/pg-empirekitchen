@@ -15,3 +15,7 @@
 
 ## 類型
 - 料理經營生涯：菜單研發、員工、展店。
+
+## Original release work
+
+The interface graphics, canvas art, synthesized music, and sound effects in this release are original procedural work created for **灶腳帝國**. The third-party packs listed above remain bundled for provenance but are not loaded at runtime.
