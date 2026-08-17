@@ -1,21 +1,11 @@
-# Attribution（pg-empirekitchen）
+# 總舖師傳奇 — 素材署名
 
-本遊戲使用以下資源（即使 CC0 仍署名）：
+| 素材 | 作者／出處 | 授權 | 來源 |
+| --- | --- | --- | --- |
+| 食物套件（Food Kit）美術 | Kenney（kenney.nl） | CC0 | <https://kenney.nl/assets/food-kit> |
+| 介面音效（Interface Sounds） | Kenney（kenney.nl） | CC0 | <https://kenney.nl/assets/interface-sounds> |
+| 衝擊音效（Impact Sounds） | Kenney（kenney.nl） | CC0 | <https://kenney.nl/assets/impact-sounds> |
+| 過關／結算音樂（Music Jingles） | Kenney（kenney.nl） | CC0 | <https://kenney.nl/assets/music-jingles> |
+| 背景音樂（Blippy Bits Loop） | Dylann Taylor | 見 `assets/licenses/blippy-bits.txt` | <https://dylanntaylor.itch.io/blippy-bits> |
 
-## 美術
-- Kenney.nl packs（CC0）— 見 `assets/licenses/` 與 [game-assets/ATTRIBUTION.md](https://github.com/sampot/playgrounds/blob/main/game-assets/ATTRIBUTION.md)
-- 角色／圖示依類型取自 Toon Characters、Sports Pack、Pixel Platformer、Pixel Shmup、Playing Cards、Boardgame Pack、Food Kit、Fish Pack 等
-
-## 音效
-- Kenney UI Audio、Impact Sounds、Casino Audio、RPG Audio（CC0）
-
-## 音樂
-- Dylann Taylor — BLIPPY BITS（Loop）https://dylanntaylor.itch.io/blippy-bits
-- HydroGene — High Quality 16-bit RPG Music（部分策略／RPG 曲）https://hydrogene.itch.io/high-quality-16bit-music
-
-## 類型
-- 料理經營生涯：菜單研發、員工、展店。
-
-## Original release work
-
-The interface graphics, canvas art, synthesized music, and sound effects in this release are original procedural work created for **灶腳帝國**. The third-party packs listed above remain bundled for provenance but are not loaded at runtime.
+全部素材已複製至 `assets/`；即使 CC0 仍依專案慣例署名。遊戲內「素材署名」連結本檔。

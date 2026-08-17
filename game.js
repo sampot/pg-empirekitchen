@@ -1,62 +1,442 @@
-const copy = value => JSON.parse(JSON.stringify(value));
-const clamp = (n,min,max) => Math.max(min,Math.min(max,n));
-export const CONFIG = {"title":"灶腳帝國","genre":"料理經營","visual":"kitchen","accent":"#ff9f1c","actions":{"serve":"完成出餐","recipe":"研發菜色","hire":"招募員工","upgrade":"改善廚房","expand":"開第二間店"},"help":"處理會倒數的訂單佇列，研發食譜、訓練員工，最後存下資金開設第二間分店。","test":["serve","serve","recipe","serve","hire","serve","upgrade","serve","serve","expand"],"id":"pg-empirekitchen"};
-export function createGame({seed=1}={}) {
- const id=CONFIG.id, f={};
- if(id==="pg-casefile") Object.assign(f,{room:0,rooms:["檔案室","暗房","站長室"],clues:[],inventory:[],combined:false});
- if(id==="pg-township") Object.assign(f,{day:1,affection:{mira:0,ren:0,yu:0},memories:0,ending:null});
- if(id==="pg-campusbond") Object.assign(f,{day:1,stats:{study:20,bond:10,energy:70,money:10},schedule:[],ending:null});
- if(id==="pg-ghostmark") Object.assign(f,{mission:1,distance:0,alert:0,cameras:true,target:false});
- if(id==="pg-blackward") Object.assign(f,{distance:0,battery:70,noise:0,keys:0,threat:15});
- if(id==="pg-backdoor") Object.assign(f,{skills:{sneak:0,talk:0,fight:0,hack:0},path:null});
- if(id==="pg-blockcity") Object.assign(f,{grid:Array(25).fill("empty"),cursor:0,pop:0,happy:50,pollution:0});
- if(id==="pg-porttycoon") Object.assign(f,{quarter:1,cargo:0,capacity:5,value:12,rival:18,history:[[12,18]]});
- if(id==="pg-empirekitchen") Object.assign(f,{recipes:1,staff:1,shops:1,orders:3,kitchen:1});
- if(id==="pg-seacast") Object.assign(f,{phase:"ready",tension:0,spot:0,weather:["晴","雨","風"][seed%3],rod:1,dex:[]});
- if(id==="pg-templeidle") Object.assign(f,{incense:5,generators:0,multiplier:1,prestige:0,lastSeen:Date.now(),offline:0});
- return {seed,turn:0,score:0,resources:10,outcome:"playing",msg:CONFIG.help,flags:f};
+/**
+ * 總舖師傳奇 — 餐廳經營核心（純邏輯，不碰 DOM）。
+ *
+ * 班次內：訂單倒數、排菜出餐；班次外：研發菜色、雇人、升級廚房、展店。
+ * 破產或名聲歸零即敗；資金與條件達標開第二間店即勝。
+ */
+
+export const SHIFT_SECONDS = 75;
+export const START_CASH = 120;
+export const EXPAND_COST = 480;
+export const EXPAND_MIN_RECIPES = 4;
+export const EXPAND_MIN_REP = 55;
+export const EXPAND_MIN_DAYS = 5;
+export const MAX_KITCHEN = 4;
+export const MAX_STAFF_PER_ROLE = 6;
+
+/** 菜色目錄：tier 愈高研發費與售價愈高。 */
+export const RECIPES = [
+  { id: "rice-ball", name: "飯糰", icon: "rice-ball", tier: 0, researchCost: 0, cookTime: 4, price: 12, patience: 20 },
+  { id: "dim-sum", name: "點心", icon: "dim-sum", tier: 0, researchCost: 0, cookTime: 5, price: 15, patience: 22 },
+  { id: "fries", name: "黃金薯", icon: "fries", tier: 1, researchCost: 30, cookTime: 5, price: 16, patience: 22 },
+  { id: "burger", name: "手工堡", icon: "burger", tier: 1, researchCost: 45, cookTime: 7, price: 22, patience: 24 },
+  { id: "ramen", name: "陽春麵", icon: "ramen", tier: 2, researchCost: 55, cookTime: 8, price: 26, patience: 26 },
+  { id: "sushi", name: "握壽司", icon: "sushi-salmon", tier: 2, researchCost: 70, cookTime: 9, price: 32, patience: 28 },
+  { id: "hotpot", name: "小火鍋", icon: "bowl-soup", tier: 3, researchCost: 90, cookTime: 11, price: 38, patience: 30 },
+  { id: "steak", name: "鐵板排", icon: "steak", tier: 3, researchCost: 110, cookTime: 13, price: 48, patience: 32 },
+];
+
+export const STAFF_ROLES = {
+  cook: { label: "廚師", wage: 8, hireCost: 25 },
+  server: { label: "外場", wage: 6, hireCost: 18 },
+};
+
+const recipeById = Object.fromEntries(RECIPES.map((r) => [r.id, r]));
+
+export function makeRng(seed = 1) {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
-export function getLegalActions(s){return s.outcome==="playing"?Object.keys(CONFIG.actions):[]}
-function seeded(s,n=1){return ((s.seed*9301+s.turn*49297+n*233)%233280)/233280}
-export function applyAction(state,action){
- const s=copy(state),f=s.flags; if(s.outcome!=="playing"||!CONFIG.actions[action]) return s; s.turn++;
- switch(CONFIG.id){
- case "pg-casefile":{
-  const clue=["燒焦班表","半張底片","備用鑰匙"][f.room]; if(action==="move"){f.room=(f.room+1)%3;s.msg="進入"+f.rooms[f.room]}
-  else if(action==="search"){if(!f.clues.includes(clue))f.clues.push(clue);s.msg="熱點中發現："+clue}
-  else if(action==="take"){const c=f.clues.at(-1);if(c&&!f.inventory.includes(c))f.inventory.push(c);s.msg=c?"證物封存："+c:"沒有可收存的物件"}
-  else if(action==="combine"){f.combined=f.inventory.includes("燒焦班表")&&f.inventory.includes("半張底片");s.msg=f.combined?"底片時間戳證明班表遭竄改":"這些證物還拼不起來"}
-  else {if(f.combined&&f.clues.length===3){s.outcome="won";s.msg="你指認站長，舊案正式重啟。"}else{s.msg="檢察官退回指控：證據鏈不完整。"}}
-  s.score=f.clues.length*20+f.inventory.length*10+(f.combined?30:0); break;}
- case "pg-township":{
-  if(["mira","ren","yu"].includes(action)){f.affection[action]+=2;f.memories++;s.msg={mira:"美菈帶你看退潮後的舊碼頭。",ren:"阿任談起父親留下的貨車。",yu:"小雨從剪報裡找到失蹤祭典。"}[action]}
-  else if(action==="work"){s.resources+=3;s.msg="你替漁船卸貨，也聽見新的流言。"} else s.msg="你在日記裡整理今天的矛盾。";
-  f.day++; if(f.day>7){const [who,val]=Object.entries(f.affection).sort((a,b)=>b[1]-a[1])[0];f.ending=val>=8?who: f.memories>=4?"town":"leave";s.outcome="won";s.msg={mira:"結局〈潮汐同行〉：你與美菈接下地方報。",ren:"結局〈公路以南〉：你和阿任駕車採集口述史。",yu:"結局〈未完檔案〉：你與小雨重開鎮史館。",town:"結局〈眾人的鎮誌〉：你留下共同編纂。",leave:"結局〈末班車〉：你帶著未完稿離鎮。"}[f.ending]}
-  s.score=f.memories*15;break;}
- case "pg-campusbond":{
-  const x=f.stats;if(action==="study"){x.study+=12;x.energy-=12}else if(action==="club"){x.bond+=10;x.energy-=10}else if(action==="bond"){x.bond+=x.bond>=25?16:5;x.energy-=8}else if(action==="work"){x.money+=8;x.energy-=10}else{x.energy+=25}
-  f.schedule.push(action);f.day++;x.energy=clamp(x.energy,0,100);s.msg="第 "+(f.day-1)+" 天："+CONFIG.actions[action];
-  if(x.energy===0){s.outcome="lost";s.msg="你過勞休學。"}else if(f.day>10){f.ending=x.bond>=70?"together":x.study>=70?"honors":"balanced";s.outcome="won";s.msg={together:"結局：社辦屋頂的告白",honors:"結局：首席畢業與遠方來信",balanced:"結局：平凡卻閃亮的青春"}[f.ending]}s.score=x.study+x.bond+x.money;break;}
- case "pg-ghostmark":{
-  if(action==="shadow"){f.alert=Math.max(0,f.alert-18);s.msg="巡邏燈從你肩旁掃過。"}else if(action==="disable"){f.cameras=false;f.alert+=6;s.msg="監視器畫面凍結。"}else if(action==="sneak"){f.distance+=28;f.alert+=f.cameras?18:8;s.msg="沿貨櫃陰影前進。"}else if(action==="objective"){if(f.distance>=55){f.target=true;s.msg="情報匣已取得。"}else s.msg="目標仍在封鎖區深處。"}else if(f.target&&f.distance>=55&&f.alert<80){f.mission++;if(f.mission>3){s.outcome="won";s.msg="三項任務完成，幽靈無痕撤離。"}else{Object.assign(f,{distance:0,alert:12,cameras:true,target:false});s.msg="撤離成功。下一任務開始。"}}else{s.msg="撤離點拒絕開門：目標或隱匿條件未達。"}
-  f.alert=clamp(f.alert,0,100);if(f.alert>=100){s.outcome="lost";s.msg="警報鎖死整個區域。"}s.score=(f.mission-1)*100+f.distance-f.alert;break;}
- case "pg-blackward":{
-  if(action==="flash"){f.battery-=12;f.noise+=3;s.msg="光束照出牆上新的抓痕。"}else if(action==="listen"){f.threat=Math.max(0,f.threat-8);f.noise=Math.max(0,f.noise-5);s.msg=f.threat>40?"腳步就在門外。":"遠處只有滴水聲。"}else if(action==="hide"){f.noise=0;f.threat=Math.max(5,f.threat-18);s.msg="你在鐵櫃裡屏住呼吸。"}else if(action==="advance"){f.distance+=14;f.noise+=12;f.threat+=10;if(f.distance>=22*(f.keys+1)&&f.keys<3){f.keys++;s.msg="講桌抽屜裡有一把刻號鑰匙。"}else s.msg="你穿過一段沒有窗的走廊。"}else if(f.keys===3&&f.distance>=65){s.outcome="won";s.msg="三道鎖彈開，黎明灌進校門。"}else s.msg="鎖孔不符。";
-  f.battery=clamp(f.battery,0,100);f.threat+=Math.floor(f.noise/8);if(f.threat>=100){s.outcome="lost";s.msg="巡夜者在黑暗裡抓住你。"}s.score=f.keys*30+f.distance;break;}
- case "pg-backdoor":{
-  if(action==="commit"){const best=Object.entries(f.skills).sort((a,b)=>b[1]-a[1])[0];if(best[1]>=4){f.path=best[0];s.outcome="won";s.msg={sneak:"你從冷卻管潛出，沒有攝影機拍到臉。",talk:"董事親自替你打開保險庫。",fight:"最後一道防爆門倒在你身後。",hack:"門禁把你識別為已退休的創辦人。"}[f.path]}else s.msg="至少把一條方案準備到 4 級。"}else{f.skills[action]++;s.msg=CONFIG.actions[action]+"，準備度 "+f.skills[action]+"/4"}s.score=Math.max(...Object.values(f.skills))*25;break;}
- case "pg-blockcity":{
-  const cost={residential:2,commercial:2,industry:1,park:3,transit:4}[action];if(s.resources<cost){s.msg="預算不足。";break}const old=f.grid[f.cursor];if(old==="empty"){f.grid[f.cursor]=action;f.cursor=(f.cursor+1)%25;s.resources-=cost;if(action==="residential")f.pop+=25;if(action==="commercial"){s.resources+=5;f.happy+=3}if(action==="industry"){s.resources+=7;f.pollution+=12;f.happy-=5}if(action==="park"){f.happy+=12;f.pollution-=5}if(action==="transit"){f.happy+=6;f.pollution-=8}s.msg="第 "+f.cursor+" 街廓完成："+CONFIG.actions[action]}f.happy=clamp(f.happy-Math.floor(f.pollution/15),0,100);f.pollution=clamp(f.pollution,0,100);if(f.pop>=100&&f.happy>=55&&f.pollution<45){s.outcome="won";s.msg="市民公投通過：積木城正式升格。"}s.score=f.pop+f.happy-f.pollution;break;}
- case "pg-porttycoon":{
-  if(action==="route"){s.resources-=3;f.cargo+=4;f.value+=3;s.msg="新航線帶回四櫃貨物。"}else if(action==="warehouse"){s.resources-=4;f.capacity+=5;f.value+=2;s.msg="自動倉儲上線。"}else if(action==="contract"){if(f.cargo>=3){f.cargo-=3;s.resources+=8;f.value+=5;s.msg="準時交付冷鏈合約。"}else s.msg="庫存不足三櫃。"}else if(action==="market"){s.resources-=2;f.rival-=3;f.value+=2;s.msg="短期報價搶走市場。"}else{f.quarter++;f.rival+=2+Math.floor(seeded(s)*3);f.value+=Math.floor(s.resources/8);s.resources+=2;f.history.push([f.value,f.rival]);s.msg="第 "+f.quarter+" 季財報公布。"}if(f.quarter>8){s.outcome=f.value>f.rival?"won":"lost";s.msg=s.outcome==="won"?"你的市值超越海岳航運。":"AI 對手取得港務特許權。"}s.score=f.value;break;}
- case "pg-empirekitchen":{
-  if(action==="serve"){if(f.orders>0){const gain=f.recipes+f.staff+f.kitchen;s.resources+=gain;f.orders--;s.msg="完美出餐，收入 +"+gain}else s.msg="暫時沒有新單。";f.orders+=seeded(s)>0.35?1:0}else if(action==="recipe"){if(s.resources>=4){s.resources-=4;f.recipes++;s.msg="解鎖第 "+f.recipes+" 道招牌菜。"}}else if(action==="hire"){if(s.resources>=6){s.resources-=6;f.staff++;s.msg="新廚助今天報到。"}}else if(action==="upgrade"){if(s.resources>=7){s.resources-=7;f.kitchen++;s.msg="爐台升級，出餐更快。"}}else if(s.resources>=18&&f.recipes>=2){s.resources-=18;f.shops=2;s.outcome="won";s.msg="第二間店點亮招牌，灶腳帝國開張。"}else s.msg="需要 18 資金與至少兩份食譜。";s.score=f.shops*100+f.recipes*15+f.staff*10;break;}
- case "pg-seacast":{
-  if(action==="spot"){f.spot=(f.spot+1)%3;f.phase="ready";s.msg="移往"+["防波堤","紅樹林","外海礁"][f.spot]+"。"}else if(action==="upgrade"){if(s.resources>=6){s.resources-=6;f.rod++;s.msg="釣竿升到 "+f.rod+" 級。"}}else if(action==="cast"){f.phase="hooked";f.tension=35+Math.floor(seeded(s)*30);s.msg="浮標下沉！保持張力。"}else if(action==="wait"&&f.phase==="hooked"){f.tension-=18;s.msg="放線，魚勢稍緩。"}else if(action==="reel"&&f.phase==="hooked"){f.tension+=22-f.rod*3;if(f.tension>=35&&f.tension<=75){const pool=[["鯖魚","竹筴魚"],["彈塗魚","烏魚"],["石斑","旗魚"]][f.spot],fish=pool[(s.turn+f.rod)%2];if(!f.dex.includes(fish))f.dex.push(fish);s.resources+=3;f.phase="ready";s.msg="釣上「"+fish+"」！"}else if(f.tension>90){f.phase="ready";s.msg="線斷了！"}}else s.msg="先拋竿等待咬鉤。";f.tension=clamp(f.tension,0,100);if(f.dex.length>=6){s.outcome="won";s.msg="六種魚完成圖鑑，海洋館邀你策展。"}s.score=f.dex.length*20+f.rod*5;break;}
- case "pg-templeidle":{
-  if(action==="tap"){f.incense+=1+f.prestige;s.msg="香煙裊裊 +"+(1+f.prestige)}else if(action==="generator"){const cost=5*(f.generators+1);if(f.incense>=cost){f.incense-=cost;f.generators++;s.msg="新香爐開始自動聚香。"}else s.msg="需要 "+cost+" 香火。"}else if(action==="upgrade"){const cost=12*f.multiplier;if(f.incense>=cost){f.incense-=cost;f.multiplier++;s.msg="法會倍率提升。"}else s.msg="需要 "+cost+" 香火。"}else if(f.incense>=50){f.incense=0;f.generators=0;f.multiplier=1;f.prestige++;s.msg="金身重修，永久加成 +1。"}else s.msg="累積 50 香火才能重修。";f.incense+=f.generators*f.multiplier*(1+f.prestige);f.lastSeen=Date.now();s.score=Math.floor(f.incense)+f.prestige*100;if(f.prestige>=2)s.outcome="won";break;}
- } return s;
+
+export function recipe(id) {
+  return recipeById[id] ?? null;
 }
-export function applyOffline(state,now=Date.now()){const s=copy(state);if(CONFIG.id!=="pg-templeidle")return s;const sec=clamp(Math.floor((now-s.flags.lastSeen)/1000),0,14400),gain=sec*s.flags.generators*s.flags.multiplier*(1+s.flags.prestige);s.flags.offline=gain;s.flags.incense+=gain;s.flags.lastSeen=now;s.msg=gain?"離線期間累積 "+gain+" 香火。":s.msg;return s}
-export function summarize(s){return {turn:s.turn,score:s.score,resources:s.resources,outcome:s.outcome,msg:s.msg,flags:s.flags}}
-export function getOutcome(s){return s.outcome}
+
+export function nextResearchable(unlocked) {
+  return RECIPES.find((r) => !unlocked.includes(r.id) && r.researchCost > 0) ?? null;
+}
+
+export function createGame({ seed = 1 } = {}) {
+  const rng = makeRng(seed);
+  return {
+    seed,
+    rngState: Math.floor(rng() * 1e9),
+    cash: START_CASH,
+    day: 1,
+    reputation: 62,
+    phase: "plan",
+    msg: "研發菜色、雇人後開始今日班次。",
+    shops: [{ id: 0, name: "灶腳本店", kitchenLevel: 1 }],
+    unlocked: ["rice-ball", "dim-sum"],
+    staff: [
+      { id: 1, role: "cook", shopId: 0 },
+      { id: 2, role: "server", shopId: 0 },
+    ],
+    orders: [],
+    shift: null,
+    spawnTimer: 6,
+    nextOrderId: 1,
+    nextStaffId: 3,
+    lifetime: { served: 0, failed: 0, revenue: 0, shifts: 0 },
+    outcome: "playing",
+  };
+}
+
+function clone(state) {
+  return structuredClone(state);
+}
+
+function rngFrom(state) {
+  const rng = makeRng(state.seed ^ state.rngState);
+  const value = rng();
+  state.rngState = (state.rngState + Math.floor(value * 997)) >>> 0;
+  return value;
+}
+
+export function staffCount(state, role) {
+  return state.staff.filter((s) => s.role === role).length;
+}
+
+export function cookCapacity(state, shopId = 0) {
+  const shop = state.shops.find((s) => s.id === shopId);
+  const level = shop?.kitchenLevel ?? 1;
+  return Math.max(1, staffCount(state, "cook") + level - 1);
+}
+
+export function activeCooks(state) {
+  return state.orders.filter((o) => o.status === "cooking").length;
+}
+
+export function cookSpeed(state, shopId = 0) {
+  const shop = state.shops.find((s) => s.id === shopId);
+  const bonus = 1 + (shop?.kitchenLevel ?? 1) * 0.12 + staffCount(state, "cook") * 0.04;
+  return bonus;
+}
+
+export function spawnInterval(state) {
+  const rep = state.reputation / 100;
+  const servers = staffCount(state, "server");
+  const base = 9 - rep * 3 - servers * 0.35;
+  return Math.max(3.2, base);
+}
+
+export function pickRecipe(state) {
+  const pool = state.unlocked;
+  if (!pool.length) return "rice-ball";
+  const roll = rngFrom(state);
+  const weighted = pool.map((id) => {
+    const r = recipe(id);
+    return { id, w: 1 + (r?.tier ?? 0) * 0.35 + roll * 0.2 };
+  });
+  const total = weighted.reduce((n, x) => n + x.w, 0);
+  let cursor = roll * total;
+  for (const item of weighted) {
+    cursor -= item.w;
+    if (cursor <= 0) return item.id;
+  }
+  return pool[pool.length - 1];
+}
+
+export function spawnOrder(state) {
+  const recipeId = pickRecipe(state);
+  const def = recipe(recipeId);
+  if (!def) return state;
+  const id = state.nextOrderId++;
+  const patience = def.patience + staffCount(state, "server") * 0.8;
+  state.orders.push({
+    id,
+    recipeId,
+    shopId: 0,
+    status: "queued",
+    patience,
+    maxPatience: patience,
+    cookProgress: 0,
+    payment: def.price,
+  });
+  state.msg = `新單：${def.name}`;
+  return state;
+}
+
+export function dailyWages(state) {
+  return state.staff.reduce((sum, s) => sum + STAFF_ROLES[s.role].wage, 0);
+}
+
+export function checkLose(state) {
+  if (state.cash < 0) {
+    state.outcome = "lost";
+    state.phase = "lost";
+    state.msg = "資金見底，餐廳倒閉。";
+    return true;
+  }
+  if (state.reputation <= 0) {
+    state.outcome = "lost";
+    state.phase = "lost";
+    state.msg = "名聲掃地，沒人再上門。";
+    return true;
+  }
+  return false;
+}
+
+export function startShift(state) {
+  if (state.phase !== "plan" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  s.phase = "shift";
+  s.orders = [];
+  s.spawnTimer = 4;
+  s.shift = { elapsed: 0, served: 0, failed: 0, revenue: 0 };
+  s.msg = "班次開始！點單排菜、完成後出餐。";
+  s.lifetime.shifts += 1;
+  return s;
+}
+
+export function endShift(state) {
+  const s = clone(state);
+  const snap = s.shift ?? { served: 0, failed: 0, revenue: 0 };
+  const wages = dailyWages(s);
+  s.cash -= wages;
+  s.day += 1;
+  s.phase = "plan";
+  s.orders = [];
+  s.shift = null;
+  s.spawnTimer = spawnInterval(s);
+  s.reputation = clamp(s.reputation - snap.failed * 2 + Math.floor(snap.served / 3), 0, 100);
+  s.lifetime.served += snap.served;
+  s.lifetime.failed += snap.failed;
+  s.lifetime.revenue += snap.revenue;
+  s.msg = wages > 0 ? `收工。今日收入 $${snap.revenue}，薪資 -$${wages}。` : "收工。整理明日菜單與人力。";
+  checkLose(s);
+  return s;
+}
+
+function clamp(n, min, max) {
+  return Math.max(min, Math.min(max, n));
+}
+
+export function step(state, dt) {
+  if (state.phase !== "shift" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  s.shift.elapsed += dt;
+  s.spawnTimer -= dt;
+  if (s.spawnTimer <= 0) {
+    spawnOrder(s);
+    s.spawnTimer = spawnInterval(s);
+  }
+
+  for (const order of s.orders) {
+    if (order.status === "queued" || order.status === "cooking" || order.status === "ready") {
+      order.patience -= dt;
+      if (order.patience <= 0 && order.status !== "ready") {
+        order.status = "expired";
+        s.shift.failed += 1;
+        s.reputation = clamp(s.reputation - 4, 0, 100);
+        s.msg = `「${recipe(order.recipeId)?.name ?? "?"}」逾時，客人離席。`;
+      }
+    }
+    if (order.status === "cooking") {
+      const def = recipe(order.recipeId);
+      order.cookProgress += dt * cookSpeed(s, order.shopId);
+      if (def && order.cookProgress >= def.cookTime) {
+        order.status = "ready";
+        s.msg = `「${def.name}」出爐，快出餐！`;
+      }
+    }
+  }
+
+  s.orders = s.orders.filter((o) => o.status !== "expired" && o.status !== "done");
+
+  if (s.shift.elapsed >= SHIFT_SECONDS) {
+    const wages = dailyWages(s);
+    s.cash -= wages;
+    s.day += 1;
+    s.phase = "plan";
+    s.lifetime.served += s.shift.served;
+    s.lifetime.failed += s.shift.failed;
+    s.lifetime.revenue += s.shift.revenue;
+    s.reputation = clamp(s.reputation + Math.floor(s.shift.served / 4) - s.shift.failed * 2, 0, 100);
+    s.msg = `第 ${s.day - 1} 天收工：+$${s.shift.revenue}，薪資 -$${wages}。`;
+    s.shift = null;
+    s.orders = [];
+    checkLose(s);
+    return s;
+  }
+
+  checkLose(s);
+  return s;
+}
+
+export function startCook(state, orderId) {
+  if (state.phase !== "shift" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  const order = s.orders.find((o) => o.id === orderId);
+  if (!order || order.status !== "queued") {
+    s.msg = order?.status === "cooking" ? "這單已在煮。" : "只能對等候中的單排菜。";
+    return s;
+  }
+  if (activeCooks(s) >= cookCapacity(s, order.shopId)) {
+    s.msg = "爐口滿載，稍後再排。";
+    return s;
+  }
+  order.status = "cooking";
+  order.cookProgress = 0;
+  const def = recipe(order.recipeId);
+  s.msg = def ? `開做「${def.name}」。` : "開始料理。";
+  return s;
+}
+
+export function serveOrder(state, orderId) {
+  if (state.phase !== "shift" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  const order = s.orders.find((o) => o.id === orderId);
+  if (!order || order.status !== "ready") {
+    s.msg = "只有出爐完成的菜才能出餐。";
+    return s;
+  }
+  const pay = order.payment;
+  s.cash += pay;
+  s.shift.served += 1;
+  s.shift.revenue += pay;
+  s.reputation = clamp(s.reputation + 1, 0, 100);
+  order.status = "done";
+  s.orders = s.orders.filter((o) => o.id !== orderId);
+  s.msg = `出餐 +$${pay}。`;
+  return s;
+}
+
+export function researchRecipe(state) {
+  if (state.phase !== "plan" || state.outcome !== "playing") return state;
+  const next = nextResearchable(state.unlocked);
+  if (!next) {
+    const s = clone(state);
+    s.msg = "菜單已全部研發。";
+    return s;
+  }
+  if (state.cash < next.researchCost) {
+    const s = clone(state);
+    s.msg = `研發「${next.name}」需要 $${next.researchCost}。`;
+    return s;
+  }
+  const s = clone(state);
+  s.cash -= next.researchCost;
+  s.unlocked.push(next.id);
+  s.reputation = clamp(s.reputation + 2, 0, 100);
+  s.msg = `研發成功：${next.name} 上架！`;
+  return s;
+}
+
+export function hireStaff(state, role) {
+  if (state.phase !== "plan" || state.outcome !== "playing") return state;
+  const spec = STAFF_ROLES[role];
+  if (!spec) return state;
+  if (staffCount(state, role) >= MAX_STAFF_PER_ROLE) {
+    const s = clone(state);
+    s.msg = `${spec.label}已滿編。`;
+    return s;
+  }
+  if (state.cash < spec.hireCost) {
+    const s = clone(state);
+    s.msg = `雇用${spec.label}需要 $${spec.hireCost}。`;
+    return s;
+  }
+  const s = clone(state);
+  s.cash -= spec.hireCost;
+  s.staff.push({ id: s.nextStaffId++, role, shopId: 0 });
+  s.msg = `新${spec.label}報到（日薪 $${spec.wage}）。`;
+  return s;
+}
+
+export function upgradeKitchen(state, shopId = 0) {
+  if (state.phase !== "plan" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  const shop = s.shops.find((sh) => sh.id === shopId);
+  if (!shop) return s;
+  if (shop.kitchenLevel >= MAX_KITCHEN) {
+    s.msg = "廚房已是最高等級。";
+    return s;
+  }
+  const cost = 40 + shop.kitchenLevel * 35;
+  if (s.cash < cost) {
+    s.msg = `升級廚房需要 $${cost}。`;
+    return s;
+  }
+  s.cash -= cost;
+  shop.kitchenLevel += 1;
+  s.msg = `廚房升到 Lv.${shop.kitchenLevel}，出餐更快。`;
+  return s;
+}
+
+export function expandShop(state) {
+  if (state.phase !== "plan" || state.outcome !== "playing") return state;
+  const s = clone(state);
+  if (s.shops.length >= 2) {
+    s.outcome = "won";
+    s.phase = "won";
+    s.msg = "第二間分店開張，總舖師傳奇達成！";
+    return s;
+  }
+  if (s.cash < EXPAND_COST) {
+    s.msg = `展店需要 $${EXPAND_COST}。`;
+    return s;
+  }
+  if (s.unlocked.length < EXPAND_MIN_RECIPES) {
+    s.msg = `至少研發 ${EXPAND_MIN_RECIPES} 道菜（目前 ${s.unlocked.length}）。`;
+    return s;
+  }
+  if (s.reputation < EXPAND_MIN_REP) {
+    s.msg = `名聲需 ≥ ${EXPAND_MIN_REP}（目前 ${s.reputation}）。`;
+    return s;
+  }
+  if (s.day < EXPAND_MIN_DAYS) {
+    s.msg = `至少經營 ${EXPAND_MIN_DAYS} 天（目前第 ${s.day} 天）。`;
+    return s;
+  }
+  s.cash -= EXPAND_COST;
+  s.shops.push({ id: 1, name: "帝國分店", kitchenLevel: 1 });
+  s.outcome = "won";
+  s.phase = "won";
+  s.msg = "第二間店點亮招牌，總舖師傳奇達成！";
+  return s;
+}
+
+export function canExpand(state) {
+  return (
+    state.shops.length < 2 &&
+    state.cash >= EXPAND_COST &&
+    state.unlocked.length >= EXPAND_MIN_RECIPES &&
+    state.reputation >= EXPAND_MIN_REP &&
+    state.day >= EXPAND_MIN_DAYS
+  );
+}
+
+export function summarize(state) {
+  const shift = state.shift;
+  return {
+    cash: state.cash,
+    day: state.day,
+    reputation: state.reputation,
+    phase: state.phase,
+    outcome: state.outcome,
+    msg: state.msg,
+    shops: state.shops.length,
+    kitchen: state.shops[0]?.kitchenLevel ?? 1,
+    unlocked: state.unlocked.length,
+    cooks: staffCount(state, "cook"),
+    servers: staffCount(state, "server"),
+    orders: state.orders.length,
+    shiftElapsed: shift?.elapsed ?? 0,
+    shiftServed: shift?.served ?? 0,
+    shiftFailed: shift?.failed ?? 0,
+    shiftRevenue: shift?.revenue ?? 0,
+    nextRecipe: nextResearchable(state.unlocked),
+    expandReady: canExpand(state),
+    score: scoreOf(state),
+  };
+}
+
+export function scoreOf(state) {
+  return (
+    state.lifetime.revenue +
+    state.unlocked.length * 25 +
+    state.shops.length * 200 +
+    state.reputation * 2
+  );
+}
+
+export function resetGame(state, seed = Date.now() % 99991) {
+  return createGame({ seed });
+}
